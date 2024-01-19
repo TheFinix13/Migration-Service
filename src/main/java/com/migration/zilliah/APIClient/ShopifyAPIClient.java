@@ -1,7 +1,9 @@
 package com.migration.zilliah.APIClient;
 
 import com.migration.zilliah.responses.ShopifyCustomerResponse;
+import com.migration.zilliah.responses.ShopifyProductResponse;
 import com.migration.zilliah.shopifymodels.Customer.ShopifyCustomer;
+import com.migration.zilliah.shopifymodels.Product.ShopifyProduct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -49,5 +51,25 @@ public class ShopifyAPIClient {
         }
     }
 
+    public List<ShopifyProduct> getShopifyProducts() {
+        String fullUrl = shopifyApiUrl + "/products.json"; // Adjust the endpoint URL
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Shopify-Access-Token", accessToken);
+        headers.setAccept(Collections.singletonList(MediaType.APPLICATION_JSON));
+
+        HttpEntity<String> requestEntity = new HttpEntity<>(headers);
+
+        ShopifyProductResponse response = restTemplate.exchange(fullUrl,
+                        HttpMethod.GET,
+                        requestEntity,
+                        ShopifyProductResponse.class)
+                .getBody();
+
+        if (response != null && response.getProducts() != null) {
+            return response.getProducts();
+        } else {
+            return Collections.emptyList();
+        }
+    }
 
 }

@@ -104,15 +104,10 @@ public class CustomerMigrationService {
         // Create a new WooCommerceCustomer and map the properties accordingly
         WooCommerceCustomer wooCommerceCustomer = new WooCommerceCustomer();
 //      wooCommerceCustomer.setId(shopifyCustomer.getId());
-
-        if (wooCommerceCustomer.getEmail() == null || wooCommerceCustomer.getEmail().isEmpty()) {
-            // Generate a unique email if the email is null or empty
-            wooCommerceCustomer.setEmail(generateUniqueEmail());
-        }
-
+        wooCommerceCustomer.setEmail(shopifyCustomer.getEmail());
         wooCommerceCustomer.setFirstName(shopifyCustomer.getFirstName());
         wooCommerceCustomer.setLastName(shopifyCustomer.getLastName());
-        wooCommerceCustomer.setUsername(shopifyCustomer.getFirstName() + " " + shopifyCustomer.getLastName());
+        wooCommerceCustomer.setUsername(shopifyCustomer.getFirstName() + "." + shopifyCustomer.getLastName());
         wooCommerceCustomer.setPassword(shopifyCustomer.getPassword());
 
         String shopifyCreatedAt = shopifyCustomer.getCreatedAt();
@@ -136,9 +131,13 @@ public class CustomerMigrationService {
 
         // Generate a random string (you can use UUID.randomUUID().toString() for better uniqueness)
         String randomString = Long.toHexString(Double.doubleToLongBits(Math.random()));
-        // Update the username to be unique
-        wooCommerceCustomer.setUsername(shopifyCustomer.getFirstName() + " " + shopifyCustomer.getLastName() + randomString);
-
+        // Update the username to be unique for customers with normal names
+        if (shopifyCustomer.getFirstName() != null && shopifyCustomer.getLastName() != null) {
+            wooCommerceCustomer.setUsername(shopifyCustomer.getFirstName() + "." + shopifyCustomer.getLastName());
+        } else {
+            // Update the username for customers with null names to something smaller
+            wooCommerceCustomer.setUsername("nullcustomer" + randomString);
+        }
         return wooCommerceCustomer;
     }
 
