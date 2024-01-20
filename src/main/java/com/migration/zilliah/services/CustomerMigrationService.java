@@ -11,10 +11,13 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 @Service
 public class CustomerMigrationService {
@@ -29,74 +32,76 @@ public class CustomerMigrationService {
         this.wooCommerceApiClient = wooCommerceApiClient;
     }
 
-    private static WooCommerceAddress getWoocommerceShippingAddress(ShopifyAddress billingAddress) {
-        // Map other shipping address properties as needed
-        WooCommerceAddress woocommerceShippingAddress = new WooCommerceAddress();
-        woocommerceShippingAddress.setFirstName(billingAddress.getFirstName());
-        woocommerceShippingAddress.setLastName(billingAddress.getLastName());
-        woocommerceShippingAddress.setCompany(billingAddress.getCompany());
-        woocommerceShippingAddress.setAddress1(billingAddress.getAddress1());
-        woocommerceShippingAddress.setAddress2(billingAddress.getAddress2());
-        woocommerceShippingAddress.setCity(billingAddress.getCity());
-        woocommerceShippingAddress.setState(billingAddress.getProvinceCode());
-        woocommerceShippingAddress.setPostcode(billingAddress.getZip());
-        woocommerceShippingAddress.setCountry(billingAddress.getCountryCode());
-        return woocommerceShippingAddress;
-    }
+    private WooCommerceAddress getWoocommerceAddress(ShopifyAddress shopifyAddress, ShopifyCustomer shopifyCustomer) {
+        if (shopifyAddress == null) {
+            return null;
+        }
 
-    private static WooCommerceAddress getWoocommerceBillingAddress(ShopifyAddress billingAddress, ShopifyCustomer shopifyCustomer) {
-        // Map other billing address properties as needed
-        WooCommerceAddress woocommerceBillingAddress = new WooCommerceAddress();
-        woocommerceBillingAddress.setFirstName(billingAddress.getFirstName());
-        woocommerceBillingAddress.setLastName(billingAddress.getLastName());
-        woocommerceBillingAddress.setAddress1(billingAddress.getAddress1());
-        woocommerceBillingAddress.setAddress2(billingAddress.getAddress2());
-        woocommerceBillingAddress.setCity(billingAddress.getCity());
-        woocommerceBillingAddress.setState(billingAddress.getProvinceCode());
-        woocommerceBillingAddress.setPostcode(billingAddress.getZip());
-        woocommerceBillingAddress.setCountry(billingAddress.getCountryCode());
-        woocommerceBillingAddress.setEmail(shopifyCustomer.getEmail());
-        woocommerceBillingAddress.setPhone(billingAddress.getPhone());
-        return woocommerceBillingAddress;
+        WooCommerceAddress woocommerceAddress = new WooCommerceAddress();
+        woocommerceAddress.setFirstName(shopifyAddress.getFirstName());
+        woocommerceAddress.setLastName(shopifyAddress.getLastName());
+        woocommerceAddress.setCompany(shopifyAddress.getCompany());
+        woocommerceAddress.setAddress1(shopifyAddress.getAddress1());
+        woocommerceAddress.setAddress2(shopifyAddress.getAddress2());
+        woocommerceAddress.setCity(shopifyAddress.getCity());
+        woocommerceAddress.setState(shopifyAddress.getProvinceCode());
+        woocommerceAddress.setPostcode(shopifyAddress.getZip());
+        woocommerceAddress.setCountry(shopifyAddress.getCountryCode());
+
+        if (shopifyCustomer != null) {
+            woocommerceAddress.setEmail(shopifyCustomer.getEmail());
+            woocommerceAddress.setPhone(shopifyAddress.getPhone());
+        }
+
+        return woocommerceAddress;
     }
 
     public void migrateCustomers() {
+        log.info("Starting customer migration...");
         try {
             // Fetch customers from Shopify
             List<ShopifyCustomer> shopifyCustomers = shopifyApiClient.getShopifyCustomers();
 
             // Migrate each customer to WooCommerce
-            for (ShopifyCustomer shopifyCustomer : shopifyCustomers) {
-                if (shopifyCustomer.getEmail() == null) {
-                    shopifyCustomer.setEmail(generateUniqueEmail()); // Generate a unique email for customers with null email
-                }
+            List<CompletableFuture<Void>> futures = shopifyCustomers.parallelStream()
+                    .map(shopifyCustomer -> CompletableFuture.runAsync(() -> migrateCustomer(shopifyCustomer)))
+                    .toList();
 
-                try {
-                    // Check if the customer with the same email already exists in WooCommerce
-                    WooCommerceCustomer existingCustomer = wooCommerceApiClient.getCustomerByEmail(shopifyCustomer.getEmail());
-
-                    if (existingCustomer != null) {
-                        // If the customer exists, you can choose to skip or update the existing customer
-                        log.info("Customer '{}' already exists in WooCommerce. Skipping migration.", shopifyCustomer.getEmail());
-                        continue;
-                    }
-
-                    // Transform ShopifyCustomer to WooCommerceCustomer
-                    WooCommerceCustomer wooCommerceCustomer = transformToWooCommerceCustomer(shopifyCustomer);
-
-                    // Migrate the customer to WooCommerce
-                    wooCommerceApiClient.createWooCommerceCustomer(wooCommerceCustomer);
-
-                    // Log successful migration
-                    log.info("Customer '{}' migrated to WooCommerce successfully.", wooCommerceCustomer.getEmail());
-                } catch (Exception e) {
-                    // Log any error encountered during migration
-                    log.error("Error migrating customer '{}' to WooCommerce: {}", shopifyCustomer.getEmail(), e.getMessage());
-                }
-            }
+            // Wait for all futures to complete
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
         } catch (Exception e) {
             // Log any error during fetching customers from Shopify
             log.error("Error fetching customers from Shopify: {}", e.getMessage());
+        }
+        log.info("Customer migration completed.");
+    }
+
+    private void migrateCustomer(ShopifyCustomer shopifyCustomer) {
+        if (shopifyCustomer.getEmail() == null) {
+            shopifyCustomer.setEmail(generateUniqueEmail()); // Generate a unique email for customers with null email
+        }
+
+        try {
+            // Check if the customer with the same email already exists in WooCommerce
+            WooCommerceCustomer existingCustomer = wooCommerceApiClient.getCustomerByEmail(shopifyCustomer.getEmail());
+
+            if (existingCustomer != null) {
+                // If the customer exists, you can choose to skip or update the existing customer
+                log.info("Customer '{}' already exists in WooCommerce. Skipping migration.", shopifyCustomer.getEmail());
+                return;
+            }
+
+            // Transform ShopifyCustomer to WooCommerceCustomer
+            WooCommerceCustomer wooCommerceCustomer = transformToWooCommerceCustomer(shopifyCustomer);
+
+            // Migrate the customer to WooCommerce
+            wooCommerceApiClient.createWooCommerceCustomer(wooCommerceCustomer);
+
+            // Log successful migration
+            log.info("Customer '{}' migrated to WooCommerce successfully.", wooCommerceCustomer.getEmail());
+        } catch (Exception e) {
+            // Log any error encountered during migration
+            log.error("Error migrating customer '{}' to WooCommerce: {}", shopifyCustomer.getEmail(), e.getMessage());
         }
     }
 
@@ -120,13 +125,15 @@ public class CustomerMigrationService {
 
         // Map billing and shipping addresses
         if (shopifyCustomer.getAddresses() != null && !shopifyCustomer.getAddresses().isEmpty()) {
-            ShopifyAddress billingAddress = shopifyCustomer.getAddresses().get(0);
-            WooCommerceAddress woocommerceBillingAddress = getWoocommerceBillingAddress(billingAddress, shopifyCustomer);
-            wooCommerceCustomer.setBilling(woocommerceBillingAddress);
-
             // Assume that the first address is used as the default shipping address
-            WooCommerceAddress woocommerceShippingAddress = getWoocommerceShippingAddress(billingAddress);
-            wooCommerceCustomer.setShipping(woocommerceShippingAddress);
+            ShopifyAddress shopifyAddress = shopifyCustomer.getAddresses().get(0);
+            if (shopifyAddress != null) {
+                WooCommerceAddress woocommerceBillingAddress = getWoocommerceAddress(shopifyAddress, shopifyCustomer);
+                wooCommerceCustomer.setBilling(woocommerceBillingAddress);
+
+                WooCommerceAddress woocommerceShippingAddress = getWoocommerceAddress(shopifyAddress, null);
+                wooCommerceCustomer.setShipping(woocommerceShippingAddress);
+            }
         }
 
         // Generate a random string (you can use UUID.randomUUID().toString() for better uniqueness)
@@ -139,6 +146,7 @@ public class CustomerMigrationService {
             wooCommerceCustomer.setUsername("nullcustomer" + randomString);
         }
         return wooCommerceCustomer;
+
     }
 
     // Helper method to generate unique email addresses
@@ -147,6 +155,7 @@ public class CustomerMigrationService {
         UUID uuid = UUID.randomUUID();
         return "nullcustomer_" + uuid + "@" + domain;
     }
+
 
     private static class DateConverter {
         public static LocalDateTime convertShopifyDate(String shopifyDate) {
@@ -157,5 +166,79 @@ public class CustomerMigrationService {
             return LocalDateTime.parse(shopifyDate, shopifyFormatter);
         }
     }
+
+    //    private static WooCommerceAddress getWoocommerceShippingAddress(ShopifyAddress billingAddress) {
+//        // Map other shipping address properties as needed
+//        WooCommerceAddress woocommerceShippingAddress = new WooCommerceAddress();
+//        woocommerceShippingAddress.setFirstName(billingAddress.getFirstName());
+//        woocommerceShippingAddress.setLastName(billingAddress.getLastName());
+//        woocommerceShippingAddress.setCompany(billingAddress.getCompany());
+//        woocommerceShippingAddress.setAddress1(billingAddress.getAddress1());
+//        woocommerceShippingAddress.setAddress2(billingAddress.getAddress2());
+//        woocommerceShippingAddress.setCity(billingAddress.getCity());
+//        woocommerceShippingAddress.setState(billingAddress.getProvinceCode());
+//        woocommerceShippingAddress.setPostcode(billingAddress.getZip());
+//        woocommerceShippingAddress.setCountry(billingAddress.getCountryCode());
+//        return woocommerceShippingAddress;
+//    }
+//
+//    private static WooCommerceAddress getWoocommerceBillingAddress(ShopifyAddress billingAddress, ShopifyCustomer shopifyCustomer) {
+//        // Map other billing address properties as needed
+//        WooCommerceAddress woocommerceBillingAddress = new WooCommerceAddress();
+//        woocommerceBillingAddress.setFirstName(billingAddress.getFirstName());
+//        woocommerceBillingAddress.setLastName(billingAddress.getLastName());
+//        woocommerceBillingAddress.setAddress1(billingAddress.getAddress1());
+//        woocommerceBillingAddress.setAddress2(billingAddress.getAddress2());
+//        woocommerceBillingAddress.setCity(billingAddress.getCity());
+//        woocommerceBillingAddress.setState(billingAddress.getProvinceCode());
+//        woocommerceBillingAddress.setPostcode(billingAddress.getZip());
+//        woocommerceBillingAddress.setCountry(billingAddress.getCountryCode());
+//        woocommerceBillingAddress.setEmail(shopifyCustomer.getEmail());
+//        woocommerceBillingAddress.setPhone(billingAddress.getPhone());
+//        return woocommerceBillingAddress;
+//    }
+
+//    public void migrateCustomers() {
+//        log.info("Starting customer migration...");
+//        try {
+//            // Fetch customers from Shopify
+//            List<ShopifyCustomer> shopifyCustomers = shopifyApiClient.getShopifyCustomers();
+//
+//            // Migrate each customer to WooCommerce
+//            for (ShopifyCustomer shopifyCustomer : shopifyCustomers) {
+//                if (shopifyCustomer.getEmail() == null) {
+//                    shopifyCustomer.setEmail(generateUniqueEmail()); // Generate a unique email for customers with null email
+//                }
+//
+//                try {
+//                    // Check if the customer with the same email already exists in WooCommerce
+//                    WooCommerceCustomer existingCustomer = wooCommerceApiClient.getCustomerByEmail(shopifyCustomer.getEmail());
+//
+//                    if (existingCustomer != null) {
+//                        // If the customer exists, you can choose to skip or update the existing customer
+//                        log.info("Customer '{}' already exists in WooCommerce. Skipping migration.", shopifyCustomer.getEmail());
+//                        continue;
+//                    }
+//
+//                    // Transform ShopifyCustomer to WooCommerceCustomer
+//                    WooCommerceCustomer wooCommerceCustomer = transformToWooCommerceCustomer(shopifyCustomer);
+//
+//                    // Migrate the customer to WooCommerce
+//                    wooCommerceApiClient.createWooCommerceCustomer(wooCommerceCustomer);
+//
+//                    // Log successful migration
+//                    log.info("Customer '{}' migrated to WooCommerce successfully.", wooCommerceCustomer.getEmail());
+//                } catch (Exception e) {
+//                    // Log any error encountered during migration
+//                    log.error("Error migrating customer '{}' to WooCommerce: {}", shopifyCustomer.getEmail(), e.getMessage());
+//                }
+//            }
+//        } catch (Exception e) {
+//            // Log any error during fetching customers from Shopify
+//            log.error("Error fetching customers from Shopify: {}", e.getMessage());
+//        }
+//        log.info("Customer migration completed.");
+//    }
+//
 
 }

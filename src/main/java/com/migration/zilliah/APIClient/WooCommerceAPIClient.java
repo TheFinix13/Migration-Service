@@ -54,12 +54,12 @@ public class WooCommerceAPIClient {
             if (responseEntity.getStatusCode() == HttpStatus.CREATED) {
                 return responseEntity.getBody();
             } else {
-                log.error("Failed to create WooCommerce customer. Response status: {}", responseEntity.getStatusCode());
-                return null;
+                log.error("Failed to create WooCommerce customer with email {}. Response status: {}", customer.getEmail(), responseEntity.getStatusCode());
+                throw new RuntimeException("Failed to create WooCommerce customer");
             }
         } catch (RestClientException e) {
-            log.error("Error creating WooCommerce customer: {}", e.getMessage());
-            return null;
+            log.error("Error creating WooCommerce customer with email {}: {}", customer.getEmail(), e.getMessage());
+            throw new RuntimeException("Failed to create WooCommerce customer", e);
         }
     }
 
@@ -78,9 +78,9 @@ public class WooCommerceAPIClient {
         );
 
         if (responseEntity.getStatusCode() == HttpStatus.OK) {
-            WooCommerceCustomer[] customersArray = responseEntity.getBody();
-            assert customersArray != null;
-            return List.of(customersArray);
+            WooCommerceCustomer[] customerArray = responseEntity.getBody();
+            assert customerArray != null;
+            return List.of(customerArray);
         } else {
             // Handle the error scenario if needed
             return Collections.emptyList();
